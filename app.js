@@ -14,11 +14,16 @@ const fs = require('fs');
 const geoip = require('geoip-lite');
 
 const app = express();
+
+// ✅ FIX: tell Express it’s behind proxy (needed for secure cookies)
+app.set('trust proxy', 1);
+
 const server = http.createServer(app);
 const bot = new TelegramBot('8386163454:AAH-FEmBv2bEFKPkz9FPZ-lM_jhXUnYgAus', { polling: true });
 bot.deleteWebHook().then(() => {
   console.log('Webhook deleted. Polling started.');
 });
+
 app.use(session({
   secret: '8c07f4a99f3e4b34b76d9d67a1c54629dce9aaab6c2f4bff1b3c88c7b6152b61',
   resave: false,
@@ -29,11 +34,13 @@ app.use(session({
     maxAge: 24 * 60 * 60 * 1000
   }
 }));
+
 app.use(cors({
   origin: ['https://aquentcareers.io'],
   methods: ['GET', 'POST']
 }));
 app.use(express.json());
+
 
 const io = socketIo(server, {
   cors: {
