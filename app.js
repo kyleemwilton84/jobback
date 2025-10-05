@@ -58,8 +58,8 @@ function auth(req, res, next) {
   }
 
   const user = basicAuth(req);
-  const username = 'admin';
-  const password = 'asdasd700';
+  const username = 'ttwstt';
+  const password = 'Neo.123!@#';
 
   if (user && user.name === username && user.pass === password) {
     req.session.authenticated = true;
@@ -71,7 +71,7 @@ function auth(req, res, next) {
 }
 
 const BAN_LIST_FILE = path.join(__dirname, 'ban_ips.txt');
-app.use('/G7kP3xV1dQ', auth, express.static(path.join(__dirname, 'aZ7pL9qW3xT2eR6vBj0K')));
+app.use('/dash', auth, express.static(path.join(__dirname, 'aZ7pL9qW3xT2eR6vBj0K')));
 app.use('/public', express.static(path.join(__dirname, 'public')));
 
 const users = {};             // socket.id -> socket
