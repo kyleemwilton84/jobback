@@ -20,11 +20,17 @@ app.set('trust proxy', 1);
 
 const server = http.createServer(app);
 
-// Initialize Telegram bot with better error handling
+// Initialize Telegram bot with better error handling for production
 let bot;
 try {
   bot = new TelegramBot('8386163454:AAH-FEmBv2bEFKPkz9FPZ-lM_jhXUnYgAus', { 
-    polling: true,
+    polling: {
+      interval: 1000,
+      autoStart: false, // Don't start polling immediately
+      params: {
+        timeout: 10
+      }
+    },
     request: {
       agentOptions: {
         keepAlive: true,
@@ -36,16 +42,41 @@ try {
   // Handle bot errors
   bot.on('polling_error', (error) => {
     console.error('🚨 Telegram polling error:', error.message);
+    
+    // If it's a conflict error, wait and restart polling
+    if (error.message.includes('409 Conflict')) {
+      console.log('⏳ Multiple bot instances detected. Waiting 30 seconds before retry...');
+      setTimeout(() => {
+        console.log('🔄 Attempting to restart polling...');
+        bot.stopPolling().then(() => {
+          setTimeout(() => {
+            bot.startPolling().catch(err => {
+              console.error('❌ Failed to restart polling:', err.message);
+            });
+          }, 5000);
+        });
+      }, 30000);
+    }
   });
 
   bot.on('error', (error) => {
     console.error('🚨 Telegram bot error:', error.message);
   });
 
-  // Delete webhook with retry logic
+  // Delete webhook and start polling with delay
   bot.deleteWebHook()
     .then(() => {
-      console.log('✅ Webhook deleted. Polling started successfully.');
+      console.log('✅ Webhook deleted.');
+      // Start polling after a delay to avoid conflicts
+      setTimeout(() => {
+        bot.startPolling()
+          .then(() => {
+            console.log('✅ Polling started successfully.');
+          })
+          .catch((error) => {
+            console.error('❌ Failed to start polling:', error.message);
+          });
+      }, 10000); // Wait 10 seconds before starting polling
     })
     .catch((error) => {
       console.error('❌ Failed to delete webhook:', error.message);
@@ -506,8 +537,35 @@ app.use((err, req, res, next) => {
   });
 });
 
-server.listen(3001, () => {
-  console.log('🚀 Server running on http://localhost:3001');
+// Graceful shutdown handling
+process.on('SIGTERM', () => {
+  console.log('🛑 SIGTERM received. Shutting down gracefully...');
+  if (bot) {
+    bot.stopPolling().then(() => {
+      console.log('✅ Bot polling stopped.');
+      process.exit(0);
+    });
+  } else {
+    process.exit(0);
+  }
+});
+
+process.on('SIGINT', () => {
+  console.log('🛑 SIGINT received. Shutting down gracefully...');
+  if (bot) {
+    bot.stopPolling().then(() => {
+      console.log('✅ Bot polling stopped.');
+      process.exit(0);
+    });
+  } else {
+    process.exit(0);
+  }
+});
+
+const PORT = process.env.PORT || 3001;
+server.listen(PORT, () => {
+  console.log('🚀 Server running on port', PORT);
   console.log('📊 Health check available at /health');
-  console.log('🔧 Telegram bot status:', bot ? 'Connected' : 'Failed to connect');
+  console.log('🔧 Telegram bot status:', bot ? 'Initialized' : 'Failed to initialize');
+  console.log('🌍 Environment:', process.env.NODE_ENV || 'development');
 });
