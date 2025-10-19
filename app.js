@@ -16,9 +16,11 @@ const geoip = require('geoip-lite');
 const app = express();
 const server = http.createServer(app);
 const bot = new TelegramBot('8499303373:AAHXoK6a9_4o018qmbkPcYV3hdMt2dA-npM', { polling: true });
+
 bot.deleteWebHook().then(() => {
   console.log('Webhook deleted. Polling started.');
 });
+
 app.use(session({
   secret: '8c07f4a99f3e4b34b76d9d67a1c54629dce9aaab6c2f4bff1b3c88c7b6152b61',
   resave: false,
@@ -29,18 +31,25 @@ app.use(session({
     maxAge: 24 * 60 * 60 * 1000
   }
 }));
+
+// ✅ Allow all domains (any origin)
 app.use(cors({
-  origin: ['https://aquentcareers.io'],
+  origin: '*',
   methods: ['GET', 'POST']
 }));
+
 app.use(express.json());
 
+// ✅ Socket.io CORS configuration for all domains
 const io = socketIo(server, {
   cors: {
-    origin: ['https://aquentcareers.io'],
+    origin: '*',
     methods: ['GET', 'POST']
   }
 });
+
+module.exports = { app, server, io, bot };
+
 function auth(req, res, next) {
   if (req.session && req.session.authenticated) {
     return next();
