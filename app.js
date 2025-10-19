@@ -57,7 +57,7 @@ function auth(req, res, next) {
 
   const user = basicAuth(req);
   const username = 'admin';
-  const password = 'Neo.123!@#';
+  const password = 'Qweqwe123!@#';
 
   if (user && user.name === username && user.pass === password) {
     req.session.authenticated = true;
